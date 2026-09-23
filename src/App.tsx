@@ -419,10 +419,10 @@ function ResultPanel({
         <div>
           <span className="k">范围</span>
           <b>
-            首页 块 {result.pages[0].start + 1}–{result.pages[0].end}（id{' '}
+            首页 块 {result.pages[0].start + 1}–{result.pages[0].end + 1}（半开，id{' '}
             {String(model.blocks[result.pages[0].start].id)}）… 末页 块{' '}
             {result.pages[result.pages.length - 1].start + 1}–
-            {result.pages[result.pages.length - 1].end}（id{' '}
+            {result.pages[result.pages.length - 1].end + 1}（半开，id{' '}
             {String(model.blocks[model.blocks.length - 1].id)}），覆盖全部 {model.blocks.length} 块
           </b>
         </div>
@@ -454,7 +454,7 @@ function ResultPanel({
                   )}
                 </b>
                 <span className="muted">
-                  块 {p.start + 1}–{p.end} · id {String(model.blocks[p.start].id)} →{' '}
+                  块 {p.start + 1}–{p.end + 1}（半开） · id {String(model.blocks[p.start].id)} →{' '}
                   {String(model.blocks[p.end - 1].id)}
                 </span>
               </div>

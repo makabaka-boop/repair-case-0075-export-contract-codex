@@ -66,7 +66,20 @@ export function parseDoc(raw: unknown): { ok: true; model: DocModel } | { ok: fa
       return { ok: false, error: { message: `${where}：缺少 id` } };
     }
     const id = b.id;
-    if (typeof id !== 'string' && typeof id !== 'number') {
+    if (typeof id === 'number') {
+      // 数值 id 必须是 JSON 可无损往返的安全整数：Infinity/NaN 经 JSON.stringify
+      // 变为 null（再导入即变成非法 id），超出 Number.MAX_SAFE_INTEGER 的整数
+      // 会在解析、唯一性判断（String 键）、页面显示与导出之间被舍入，
+      // 造成原始标识改变或不同块误判重复。需要更大标识时请使用字符串 id。
+      if (!Number.isSafeInteger(id)) {
+        return {
+          ok: false,
+          error: {
+            message: `${where}：数值 id 必须是 ${Number.MIN_SAFE_INTEGER} 到 ${Number.MAX_SAFE_INTEGER} 之间的安全整数（Infinity、NaN、小数或超出安全整数范围均不合法；超大标识请改用字符串 id）`,
+          },
+        };
+      }
+    } else if (typeof id !== 'string') {
       return { ok: false, error: { message: `${where}：id 必须是字符串或数字` } };
     }
     const key = typeof id === 'number' ? `n:${String(id)}` : `s:${id}`;

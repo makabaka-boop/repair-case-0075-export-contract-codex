@@ -15,7 +15,11 @@ export interface ExportPage {
   side?: 'front' | 'back';
   /** 本页容量：仅双面文件写出 */
   capacity?: number;
-  /** 1 起块号半开区间 */
+  /**
+   * 1 起块号半开区间 [startBlock, endBlock)：
+   * startBlock 为本页首块块号，endBlock 为下一首页块号（末页为 n+1），
+   * 因此 endBlock 同时是「本页排除的第一个块号」且 endId 指向本页末块。
+   */
   startBlock: number;
   endBlock: number;
   startId: string | number;
@@ -65,7 +69,9 @@ export function buildExport(model: DocModel, result: PaginateResult, adoptedAt: 
       // 单容量时这两个键完全不出现，保证导出结构逐项不变。
       ...(duplex ? { side, capacity } : {}),
       startBlock: p.start + 1,
-      endBlock: p.end,
+      // 内部 [p.start, p.end) 为 0 起半开区间；1 起右端为 p.end + 1。
+      // 单块页得到 [k+1, k+2)；相邻页前一页 endBlock 等于后一页 startBlock。
+      endBlock: p.end + 1,
       startId: model.blocks[p.start].id,
       endId: model.blocks[p.end - 1].id,
       used: p.used,

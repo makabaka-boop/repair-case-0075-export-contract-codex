@@ -359,6 +359,250 @@ describe('导入校验', () => {
   });
 });
 
+describe('导出区间与 id 契约：半开区间、endId、JSON 往返、无效 id 与状态保护', () => {
+  /** 运行分页并构造导出；无解直接让用例失败。 */
+  function exportOf(model: DocModel, stamp = '2026-09-23T00:00:00.000Z') {
+    const out = paginate(model);
+    expect(out.ok).toBe(true);
+    if (!out.ok) throw new Error('paginate failed');
+    return { result: out.result, doc: buildExport(model, out.result, stamp) };
+  }
+
+  /**
+   * 逐项核对导出页区间：
+   * - 1 起半开 [startBlock, endBlock)，页内非空；
+   * - 相邻页 endBlock === 下一 startBlock，首页从 1 起、末页到 n+1；
+   * - startId/endId 与区间端点块一致，endId 指向末块（endBlock-1）；
+   * - 按半开语义取回的块恰好覆盖全序列，不重不漏。
+   */
+  function expectHalfOpenContract(model: DocModel, doc: ReturnType<typeof exportOf>['doc']) {
+    const n = model.blocks.length;
+    const pages = doc.pagination.pages;
+    const covered = new Array<number>(n).fill(-1);
+    pages.forEach((p, idx) => {
+      // 1 起半开：合法且非空
+      expect(p.startBlock).toBeGreaterThanOrEqual(1);
+      expect(p.endBlock).toBeGreaterThan(p.startBlock);
+      // 相邻页连续
+      if (idx === 0) expect(p.startBlock).toBe(1);
+      else expect(p.startBlock).toBe(pages[idx - 1].endBlock);
+      // 0 起下标
+      const s = p.startBlock - 1;
+      const e = p.endBlock - 1;
+      expect(e).toBeLessThanOrEqual(n);
+      // 端点 id
+      expect(p.startId).toBe(model.blocks[s].id);
+      expect(p.endId).toBe(model.blocks[e - 1].id);
+      // endBlock 所指标识（若存在）必须是下一页首块，而非本页末块
+      if (e < n) expect(model.blocks[e].id).toBe(pages[idx + 1].startId);
+      // 半开语义取块：[s, e)
+      for (let k = s; k < e; k++) {
+        expect(covered[k]).toBe(-1); // 不重
+        covered[k] = idx;
+      }
+    });
+    expect(pages[pages.length - 1].endBlock).toBe(n + 1);
+    expect(covered.every((v) => v >= 0)).toBe(true); // 不漏
+  }
+
+  it('单块页：半开区间起止不相等（[k+1,k+2)），endId 指向唯一一块', () => {
+    // 每块后强制分页 → 三个单块页
+    const m = makeModel(100, [10, 20, 30], [BREAK, BREAK, NONE]);
+    const { doc } = exportOf(m);
+    expect(doc.pagination.pages.map((p) => [p.startBlock, p.endBlock])).toEqual([
+      [1, 2],
+      [2, 3],
+      [3, 4],
+    ]);
+    for (const p of doc.pagination.pages) {
+      expect(p.endBlock - p.startBlock).toBe(1); // 单块页不是空区间
+      expect(p.startId).toBe(p.endId);
+    }
+    expect(doc.pagination.pages.map((p) => p.endId)).toEqual([1, 2, 3]);
+    expectHalfOpenContract(m, doc);
+  });
+
+  it('多页连续区间：前页 endBlock === 后页 startBlock，末页 endBlock = n+1', () => {
+    // H=100：[60,30] 一页、[60,30] 一页、[60] 一页
+    const m = makeModel(100, [60, 30, 60, 30, 60]);
+    const { result, doc } = exportOf(m);
+    expect(result.pages.map((p) => [p.start, p.end])).toEqual([
+      [0, 2],
+      [2, 4],
+      [4, 5],
+    ]);
+    expect(doc.pagination.pages.map((p) => [p.startBlock, p.endBlock])).toEqual([
+      [1, 3],
+      [3, 5],
+      [5, 6],
+    ]);
+    expect(doc.pagination.pages.map((p) => [p.startId, p.endId])).toEqual([
+      [1, 2],
+      [3, 4],
+      [5, 5],
+    ]);
+    expectHalfOpenContract(m, doc);
+  });
+
+  it('双面多页：区间连续且 side/capacity 与区间一一对应', () => {
+    const m: DocModel = {
+      pageHeight: 5,
+      backPageHeight: 3,
+      blocks: [2, 3, 2, 3].map((height, i) => ({ id: i + 1, height, edge: NONE })),
+    };
+    const { doc } = exportOf(m);
+    expect(doc.pagination.pages.map((p) => [p.startBlock, p.endBlock])).toEqual([
+      [1, 3],
+      [3, 4],
+      [4, 5],
+    ]);
+    expect(doc.pagination.pages.map((p) => p.side)).toEqual(['front', 'back', 'front']);
+    expect(doc.pagination.pages.map((p) => p.endId)).toEqual([2, 3, 4]);
+    expectHalfOpenContract(m, doc);
+  });
+
+  it('JSON 往返：字符串/安全整数 id 与区间逐项重现（当前结果与采纳快照）', () => {
+    const MAX = Number.MAX_SAFE_INTEGER;
+    const MIN = Number.MIN_SAFE_INTEGER;
+    const m: DocModel = {
+      pageHeight: 10000,
+      // 数字 MAX 与同值字符串视为不同 id；MIN、普通数字与字符串并存
+      blocks: [
+        { id: 'title', height: 10, edge: NONE },
+        { id: 1, height: 20, edge: NONE },
+        { id: '1', height: 30, edge: NONE },
+        { id: MAX, height: 40, edge: NONE },
+        { id: MIN, height: 50, edge: NONE },
+        { id: String(MAX), height: 60, edge: BREAK },
+        { id: 'tail', height: 70, edge: NONE },
+      ],
+    };
+    const { doc } = exportOf(m, '2026-09-23T00:00:00.000Z');
+    // 序列化后数值 id 不允许被改成 null 或被舍入
+    const text = JSON.stringify(doc);
+    expect(text).not.toContain('null');
+    const round = JSON.parse(text);
+    const reparsed = parseDoc(round);
+    expect(reparsed.ok).toBe(true);
+    if (!reparsed.ok) return;
+    const ids = reparsed.model.blocks.map((b) => b.id);
+    expect(ids).toEqual(['title', 1, '1', MAX, MIN, String(MAX), 'tail']);
+    expect(ids[3]).not.toBe(ids[5]); // 数字 MAX 与字符串 MAX 不被混判
+    const out2 = paginate(reparsed.model);
+    expect(out2.ok).toBe(true);
+    if (!out2.ok) return;
+    const doc2 = buildExport(reparsed.model, out2.result, doc.adoptedAt);
+    // 再导回复核：同一份文件精确指向相同块与页范围
+    expect(doc2.pagination).toEqual(doc.pagination);
+    expect(doc2.blocks).toEqual(doc.blocks);
+    expect(doc2).toEqual(doc);
+    expectHalfOpenContract(reparsed.model, doc2);
+  });
+
+  it('拒绝无穷值与非安全整数 id：1e400/Infinity/NaN/越界整数/小数', () => {
+    const bad = [
+      Infinity,
+      -Infinity,
+      NaN,
+      1e400,
+      -1e400,
+      Number.MAX_SAFE_INTEGER + 1,
+      Number.MIN_SAFE_INTEGER - 1,
+      9007199254740992, // 2^53：已不能逐整数表示
+      9007199254740993, // 与 2^53 舍入为同一个 double
+      1.5,
+      true,
+    ];
+    for (const id of bad) {
+      const r = parseDoc({ pageHeight: 100, blocks: [{ id, height: 1 }] });
+      expect(r.ok).toBe(false);
+    }
+    // 从 JSON 文本路径同样被接受为 Infinity 后拒绝（页面输入 1e400 的情形）
+    const fromText = parseDoc(JSON.parse('{ "pageHeight": 100, "blocks": [ { "id": 1e400, "height": 1 } ] }'));
+    expect(fromText.ok).toBe(false);
+    // 无穷值序列化退化为 null：旧链路会写坏文件；现在入口即拒绝，坏文件再导入也拒绝
+    const serialized = JSON.stringify({ id: Infinity });
+    expect(serialized).toBe('{"id":null}');
+    const nullBack = parseDoc(JSON.parse('{ "pageHeight": 100, "blocks": [ { "id": null, "height": 1 } ] }'));
+    expect(nullBack.ok).toBe(false);
+  });
+
+  it('安全整数边界 id 合法且保持唯一', () => {
+    const MAX = Number.MAX_SAFE_INTEGER;
+    const ok = parseDoc({
+      pageHeight: 100,
+      blocks: [
+        { id: MAX, height: 1 },
+        { id: MAX - 1, height: 1 },
+        { id: Number.MIN_SAFE_INTEGER, height: 1 },
+      ],
+    });
+    expect(ok.ok).toBe(true);
+  });
+
+  it('失败时状态保护：无效 id 在替换当前文档前被拒绝，采纳快照可原样再导出', () => {
+    // 既有文档 + 已采纳版本
+    const base = parseDoc({
+      pageHeight: 100,
+      blocks: [
+        { id: 'keep-1', height: 60, breakAfter: true },
+        { id: 'keep-2', height: 40 },
+      ],
+    });
+    expect(base.ok).toBe(true);
+    if (!base.ok) return;
+    const baseOut = paginate(base.model);
+    expect(baseOut.ok).toBe(true);
+    if (!baseOut.ok) return;
+    const adoptedExport = JSON.stringify(buildExport(base.model, baseOut.result, '2026-09-23T00:00:00.000Z'));
+
+    // 模拟 App.loadRaw：先过 parseDoc 闸门，失败则不触碰当前文档/采纳版本
+    const attempt = (raw: unknown) => {
+      const r = parseDoc(raw);
+      if (!r.ok) return 'rejected';
+      throw new Error('本批输入必须全部被拒绝');
+    };
+    for (const badId of [Infinity, 1e400, NaN, Number.MAX_SAFE_INTEGER + 1, 1.2, null, [], {}]) {
+      expect(
+        attempt({ pageHeight: 100, blocks: [{ id: badId, height: 1 }] }),
+      ).toBe('rejected');
+    }
+
+    // 当前文档与采纳版本内容不变、可继续下载
+    const stillOut = paginate(base.model);
+    expect(stillOut.ok).toBe(true);
+    if (!stillOut.ok) return;
+    expect(JSON.stringify(buildExport(base.model, stillOut.result, '2026-09-23T00:00:00.000Z'))).toBe(
+      adoptedExport,
+    );
+    // 采纳文件本身仍可重新导入
+    const readopt = parseDoc(JSON.parse(adoptedExport));
+    expect(readopt.ok).toBe(true);
+  });
+
+  it('兼容单双面字段与既有块标记：半开区间导出不影响 breakAfter/sameAfter 往返', () => {
+    const single = makeModel(100, [30, 40, 20], [BREAK, SAME, NONE]);
+    const d1 = exportOf(single).doc;
+    expect(d1.backPageHeight).toBeUndefined();
+    expect(d1.pagination.pages.every((p) => p.side === undefined && p.capacity === undefined)).toBe(true);
+    expect(d1.blocks.map((b) => [b.breakAfter ?? false, b.sameAfter ?? false])).toEqual([
+      [true, false],
+      [false, true],
+      [false, false],
+    ]);
+
+    const duplex: DocModel = {
+      pageHeight: 5,
+      backPageHeight: 3,
+      blocks: [2, 3, 2, 3].map((height, i) => ({ id: `d${i}`, height, edge: NONE })),
+    };
+    const d2 = exportOf(duplex).doc;
+    expect(d2.backPageHeight).toBe(3);
+    expect(d2.pagination.pages.every((p) => p.side !== undefined && p.capacity !== undefined)).toBe(true);
+    expectHalfOpenContract(duplex, d2);
+  });
+});
+
 describe('大夹具验收（性能 + 正确性）', () => {
   it('200000 块随机文档 4 秒内完成且方案合法', () => {
     const model = randomDoc(200_000, 1000, 0x9e3779b9);

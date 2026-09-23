@@ -60,7 +60,7 @@ docker compose run --rm verify
 | `pageHeight` | 整数 | 1 ≤ pageHeight ≤ 10000（双面模式下为**正面**容量） |
 | `backPageHeight` | 整数，可省略 | 1 ≤ backPageHeight ≤ 10000；存在即启用**双面模式** |
 | `blocks` | 数组 | 1 ≤ 长度 ≤ 200000，顺序即排版顺序 |
-| `blocks[].id` | 字符串或数字 | 在数组内**唯一**（数字 `1` 与字符串 `"1"` 视为不同 id） |
+| `blocks[].id` | 字符串或安全整数 | 在数组内**唯一**（数字 `1` 与字符串 `"1"` 视为不同 id）。数值 id 必须是 Number 安全整数（`−9007199254740991..9007199254740991`，无小数）；`Infinity`/`NaN`/超出安全整数范围的数值会被拒绝——它们无法经 JSON 无损往返（`Infinity` 序列化为 `null`，超大整数被舍入）。超大标识请使用字符串 id |
 | `blocks[].height` | 整数 | 1 ≤ height ≤ 页容量（双面模式下 ≤ max(pageHeight, backPageHeight)） |
 | `blocks[].breakAfter` | 布尔，可省略 | 该块与后一块之间**强制分页** |
 | `blocks[].sameAfter` | 布尔，可省略 | 该块与后一块**必须同页** |
@@ -115,7 +115,7 @@ docker compose run --rm verify
       {
         "page": 1,
         "side": "front", "capacity": 300,
-        "startBlock": 1, "endBlock": 3,
+        "startBlock": 1, "endBlock": 4,
         "startId": "title", "endId": "warn-hot-body",
         "used": 230, "remaining": 70
       }
@@ -125,7 +125,12 @@ docker compose run --rm verify
 }
 ```
 
-`startBlock`/`endBlock` 为 1 起块号、半开区间（endBlock 是本页最后一块）。
+`startBlock`/`endBlock` 为 1 起块号的**半开区间 `[startBlock, endBlock)`**：
+`startBlock` 是本页首块块号，`endBlock` 是下一页首块块号（末页为 `块数 + 1`）。
+因此单块页为 `[k+1, k+2)`（起、止不相等），相邻页满足
+`pages[i].endBlock === pages[i+1].startBlock`；`endId` 指向本页末块
+（即块号 `endBlock - 1`），数值与标识不再矛盾，外部系统按半开语义取块不重不漏。
+首页 `startBlock` 恒为 1，末页 `endBlock` 恒为 `blocks.length + 1`。
 `backPageHeight` 与每页的 `side`/`capacity` 仅双面文件写出；重新导入时
 `backPageHeight` 会被读回以恢复双面计算语义（`pagination` 字段仍被忽略）。
 单容量导出不包含这三个键，结构与引入双面模式前逐项一致。
