@@ -69,6 +69,23 @@ export function parseDoc(raw: unknown): { ok: true; model: DocModel } | { ok: fa
     if (typeof id !== 'string' && typeof id !== 'number') {
       return { ok: false, error: { message: `${where}：id 必须是字符串或数字` } };
     }
+    // 数值 id 必须是有限安全整数：Infinity/NaN 在 JSON 中无法往返（序列化为 null
+    // 且重新导入必失败）；超出安全整数范围的值在 JSON.parse 时已被舍入，会改变
+    // 原始标识、误判唯一性。需要更大整数标识的用户应改用字符串 id。
+    if (typeof id === 'number' && !Number.isSafeInteger(id)) {
+      if (!Number.isFinite(id)) {
+        return { ok: false, error: { message: `${where}：数字 id 不能是无穷或 NaN（如 1e400）` } };
+      }
+      if (!Number.isInteger(id)) {
+        return { ok: false, error: { message: `${where}：数字 id 必须是整数` } };
+      }
+      return {
+        ok: false,
+        error: {
+          message: `${where}：数字 id ${String(id)} 超出安全整数范围（±${Number.MAX_SAFE_INTEGER}），请改用字符串 id`,
+        },
+      };
+    }
     const key = typeof id === 'number' ? `n:${String(id)}` : `s:${id}`;
     if (seen.has(key)) {
       return { ok: false, error: { message: `${where}：id 重复（${String(id)}）` } };

@@ -15,10 +15,16 @@ export interface ExportPage {
   side?: 'front' | 'back';
   /** 本页容量：仅双面文件写出 */
   capacity?: number;
-  /** 1 起块号半开区间 */
+  /**
+   * 1 起块号、半开区间 [startBlock, endBlock)：endBlock 为下一页起点
+   * （末页等于块总数 + 1）；相邻页严格满足前页 endBlock === 次页 startBlock，
+   * 单块页为 [k, k+1) 而非空区间。
+   */
   startBlock: number;
   endBlock: number;
+  /** 本页首块 id（= blocks[startBlock-1].id） */
   startId: string | number;
+  /** 本页最后（包含）一块的 id，即 blocks[endBlock-1] 的 id；与半开 endBlock 不矛盾 */
   endId: string | number;
   used: number;
   remaining: number;
@@ -65,7 +71,9 @@ export function buildExport(model: DocModel, result: PaginateResult, adoptedAt: 
       // 单容量时这两个键完全不出现，保证导出结构逐项不变。
       ...(duplex ? { side, capacity } : {}),
       startBlock: p.start + 1,
-      endBlock: p.end,
+      // 半开区间右端（0 起的 p.end 是本页之后位置，1 起即 p.end + 1）：
+      // 单块页得到 [k, k+1)；相邻页前页 endBlock === 次页 startBlock。
+      endBlock: p.end + 1,
       startId: model.blocks[p.start].id,
       endId: model.blocks[p.end - 1].id,
       used: p.used,

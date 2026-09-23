@@ -60,7 +60,7 @@ docker compose run --rm verify
 | `pageHeight` | 整数 | 1 ≤ pageHeight ≤ 10000（双面模式下为**正面**容量） |
 | `backPageHeight` | 整数，可省略 | 1 ≤ backPageHeight ≤ 10000；存在即启用**双面模式** |
 | `blocks` | 数组 | 1 ≤ 长度 ≤ 200000，顺序即排版顺序 |
-| `blocks[].id` | 字符串或数字 | 在数组内**唯一**（数字 `1` 与字符串 `"1"` 视为不同 id） |
+| `blocks[].id` | 字符串或数字 | 在数组内**唯一**（数字 `1` 与字符串 `"1"` 视为不同 id）；数字 id 必须是**有限安全整数**（±9007199254740991 以内的整数），`Infinity`/`NaN`（如 `1e400`）、小数、超出安全整数范围的数字一律拒绝——超过 2^53 的整数请改用字符串 id（如 `"9007199254740993"`），字符串原样保留不做任何转换 |
 | `blocks[].height` | 整数 | 1 ≤ height ≤ 页容量（双面模式下 ≤ max(pageHeight, backPageHeight)） |
 | `blocks[].breakAfter` | 布尔，可省略 | 该块与后一块之间**强制分页** |
 | `blocks[].sameAfter` | 布尔，可省略 | 该块与后一块**必须同页** |
@@ -115,9 +115,9 @@ docker compose run --rm verify
       {
         "page": 1,
         "side": "front", "capacity": 300,
-        "startBlock": 1, "endBlock": 3,
-        "startId": "title", "endId": "warn-hot-body",
-        "used": 230, "remaining": 70
+        "startBlock": 1, "endBlock": 2,
+        "startId": "title", "endId": "title",
+        "used": 60, "remaining": 240
       }
     ]
   },
@@ -125,7 +125,17 @@ docker compose run --rm verify
 }
 ```
 
-`startBlock`/`endBlock` 为 1 起块号、半开区间（endBlock 是本页最后一块）。
+块区间契约（唯一且可逆，外部拼版系统可直接按此切片）：
+
+- `startBlock`/`endBlock` 为 **1 起块号、半开区间 `[startBlock, endBlock)`**：页内块号满足
+  `startBlock ≤ k < endBlock`，单块页为 `[k, k+1)`（**不是**起止相等的空区间）；
+- 相邻页严格首尾相接：`pages[i].endBlock === pages[i+1].startBlock`；首页 `startBlock === 1`，
+  末页 `endBlock === blocks.length + 1`，全部区间恰好覆盖每个块一次、不重不漏；
+- `startId` 是首块（`blocks[startBlock-1]`）的 id；`endId` 是**最后包含的一块**
+  （`blocks[endBlock-1]`）的 id——`endId` 按包含语义命名，与半开的 `endBlock` 不矛盾；
+- 据此区间和 id 可从 `blocks` 数组唯一定位本页全部块；下载文件重新导入本工具时，
+  同一份文件必然复核出完全相同的块与页范围。
+
 `backPageHeight` 与每页的 `side`/`capacity` 仅双面文件写出；重新导入时
 `backPageHeight` 会被读回以恢复双面计算语义（`pagination` 字段仍被忽略）。
 单容量导出不包含这三个键，结构与引入双面模式前逐项一致。
@@ -203,3 +213,10 @@ docker-compose.yml    # web（WEB_PORT 覆盖）+ 一次性 verify 服务
 - **结构不变性**：省略 `backPageHeight` 时解析、计算、页面与导出结构逐项不变
   （导出不含 `backPageHeight`/`side`/`capacity` 键）；双面导出固化
   `backPageHeight` 与每页 `side`/`capacity`，重新导入恢复双面语义。
+- **区间与 id 契约（`contract.test.ts`）**：单块页导出为 `[k, k+1)`（非空区间）；
+  多页导出相邻页 `endBlock === startBlock`、首页从 1 起、末页到 `blocks.length+1`、
+  按半开语义展开不重不漏覆盖每块一次；`startId`/`endId` 与 `blocks[startBlock-1]` /
+  `blocks[endBlock-1]` 交叉核对；`Infinity`/`NaN`（`1e400`）、小数与超出
+  `±Number.MAX_SAFE_INTEGER` 的数字 id 在替换当前文档前被拒绝（大整数可改字符串 id
+  原样保留）；当前结果与已采纳快照下载内容一致，JSON 序列化→重新导入→重新分页
+  与原方案逐项相同；非法导入后当前文档与已采纳版本引用级保留。

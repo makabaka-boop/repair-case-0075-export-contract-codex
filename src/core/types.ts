@@ -17,7 +17,10 @@ export type Edge = 0 | 1 | 2 | 3;
 
 /** 规范化后的文档块：保留原始 id（导出时原样写回）。 */
 export interface Block {
-  /** 用户提供的唯一 id，允许字符串或数字 */
+  /**
+   * 用户提供的唯一 id，允许字符串或数字；数字 id 经导入校验保证为有限安全整数
+   * （见 model.parseDoc），因此可原样往返 JSON 而不被舍入或序列化为 null。
+   */
   id: string | number;
   /** 块高度，1 .. 页面容量的整数（双面模式下为 1 .. max(pageHeight, backPageHeight)） */
   height: number;
